@@ -2357,7 +2357,7 @@ static void zend_compile_list_assign(znode *result, zend_ast *ast, znode *expr_n
 {
 	zend_ast_list *list = zend_ast_get_list(ast);
 	uint32_t i;
-	zend_bool has_elems = 0;
+	zend_bool has_elems = 0, has_variadic = 0;
 
 	for (i = 0; i < list->children; ++i) {
 		zend_ast *var_ast = list->child[i];
@@ -2368,15 +2368,24 @@ static void zend_compile_list_assign(znode *result, zend_ast *ast, znode *expr_n
 		}
 		has_elems = 1;
 
-		dim_node.op_type = IS_CONST;
-		ZVAL_LONG(&dim_node.u.constant, i);
-
-		if (expr_node->op_type == IS_CONST) {
-			Z_TRY_ADDREF(expr_node->u.constant);
+		if (has_variadic) {
+			zend_error_noreturn(E_COMPILE_ERROR, "Only the last parameter can be variadic");
 		}
 
-		zend_emit_op(&fetch_result, ZEND_FETCH_LIST, expr_node, &dim_node);
-		zend_emit_assign_znode(var_ast, &fetch_result);
+		if (var_ast->attr & ZEND_PARAM_VARIADIC) {
+			has_variadic = 1;
+		} else {
+
+			dim_node.op_type = IS_CONST;
+			ZVAL_LONG(&dim_node.u.constant, i);
+
+			if (expr_node->op_type == IS_CONST) {
+				Z_TRY_ADDREF(expr_node->u.constant);
+			}
+
+			zend_emit_op(&fetch_result, ZEND_FETCH_LIST, expr_node, &dim_node);
+			zend_emit_assign_znode(var_ast, &fetch_result);
+		}
 	}
 
 	if (!has_elems) {

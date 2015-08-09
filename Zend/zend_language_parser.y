@@ -1162,7 +1162,8 @@ assignment_list:
 ;
 
 assignment_list_element:
-		variable						{ $$ = $1; }
+		T_ELLIPSIS simple_variable		{ $$ = zend_ast_create_ex(ZEND_AST_VAR, ZEND_PARAM_VARIADIC, $2); }
+	|	variable                        { $$ = $1; }
 	|	T_LIST '(' assignment_list ')'	{ $$ = $3; }
 	|	/* empty */						{ $$ = NULL; }
 ;
