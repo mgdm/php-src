@@ -340,11 +340,29 @@ int zend_optimizer_replace_by_const(zend_op_array *op_array,
 				 */
 				case ZEND_FREE:
 				case ZEND_CASE: {
-					zend_op *m = opline;
-					zend_op *end = op_array->opcodes + op_array->last;
+					zend_op *m, *n;
+					int brk = op_array->last_brk_cont;
+					zend_bool in_switch = 0;
+					while (brk--) {
+						if (op_array->brk_cont_array[brk].start <= (opline - op_array->opcodes) &&
+								op_array->brk_cont_array[brk].brk > (opline - op_array->opcodes)) {
+							in_switch = 1;
+							break;
+						}
+					}
 
-					while (m < end) {
-						if (ZEND_OP1_TYPE(m) == type && ZEND_OP1(m).var == var) {
+					if (!in_switch) {
+						ZEND_ASSERT(opline->opcode == ZEND_FREE);
+						MAKE_NOP(opline);
+						zval_dtor(val);
+						return 1;
+					}
+
+					m = opline;
+					n = op_array->opcodes + op_array->brk_cont_array[brk].brk + 1;
+					while (m < n) {
+						if (ZEND_OP1_TYPE(m) == type &&
+								ZEND_OP1(m).var == var) {
 							if (m->opcode == ZEND_CASE) {
 								zval old_val;
 								ZVAL_COPY_VALUE(&old_val, val);
@@ -353,7 +371,6 @@ int zend_optimizer_replace_by_const(zend_op_array *op_array,
 								ZVAL_COPY_VALUE(val, &old_val);
 							} else if (m->opcode == ZEND_FREE) {
 								MAKE_NOP(m);
-								break;
 							} else {
 								ZEND_ASSERT(0);
 							}
@@ -363,6 +380,20 @@ int zend_optimizer_replace_by_const(zend_op_array *op_array,
 					zval_dtor(val);
 					return 1;
 				}
+				case ZEND_VERIFY_RETURN_TYPE: {
+					zend_arg_info *ret_info = op_array->arg_info - 1;
+					ZEND_ASSERT((opline + 1)->opcode == ZEND_RETURN || (opline + 1)->opcode == ZEND_RETURN_BY_REF);
+					if (ret_info->class_name
+						|| ret_info->type_hint == IS_CALLABLE
+						|| !ZEND_SAME_FAKE_TYPE(ret_info->type_hint, Z_TYPE_P(val))
+						|| (op_array->fn_flags & ZEND_ACC_RETURN_REFERENCE)) {
+						zval_dtor(val);
+						return 0;
+					}
+					MAKE_NOP(opline);
+					zend_optimizer_update_op1_const(op_array, opline + 1, val);
+					return 1;
+				  }
 				default:
 					break;
 			}
@@ -457,17 +488,6 @@ static void zend_optimize(zend_op_array      *op_array,
 	 */
 	if (ZEND_OPTIMIZER_PASS_11 & OPTIMIZATION_LEVEL) {
 		zend_optimizer_compact_literals(op_array, ctx);
-	}
-
-	if ((ZEND_OPTIMIZER_PASS_1
-		|ZEND_OPTIMIZER_PASS_2
-		|ZEND_OPTIMIZER_PASS_3
-		|ZEND_OPTIMIZER_PASS_4
-		|ZEND_OPTIMIZER_PASS_5
-		|ZEND_OPTIMIZER_PASS_9
-		|ZEND_OPTIMIZER_PASS_10
-		|ZEND_OPTIMIZER_PASS_11) & OPTIMIZATION_LEVEL) {
-		zend_regenerate_var_liveliness_info(op_array);
 	}
 }
 

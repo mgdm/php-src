@@ -88,18 +88,17 @@ static const zend_internal_function zend_pass_function = {
 #undef zval_ptr_dtor
 #define zval_ptr_dtor(zv) i_zval_ptr_dtor(zv ZEND_FILE_LINE_CC)
 
-#define PZVAL_LOCK(z) if (Z_REFCOUNTED_P(z)) Z_ADDREF_P((z))
-#define SELECTIVE_PZVAL_LOCK(pzv, opline)	if (RETURN_VALUE_USED(opline)) { PZVAL_LOCK(pzv); }
-
 #define READY_TO_DESTROY(zv) \
 	(zv && Z_REFCOUNTED_P(zv) && Z_REFCOUNT_P(zv) == 1)
 
-#define EXTRACT_ZVAL_PTR(zv) do {						\
-		zval *__zv = (zv);								\
-		if (Z_TYPE_P(__zv) == IS_INDIRECT) {			\
-			ZVAL_COPY(__zv, Z_INDIRECT_P(__zv));		\
-		}												\
-	} while (0)
+#define EXTRACT_ZVAL_PTR(zv, check_null) do {		\
+	zval *__zv = (zv);								\
+	if (Z_TYPE_P(__zv) == IS_INDIRECT) {			\
+		if (!(check_null) || Z_INDIRECT_P(__zv)) {	\
+			ZVAL_COPY(__zv, Z_INDIRECT_P(__zv));	\
+		}											\
+	}												\
+} while (0)
 
 #define FREE_OP(should_free) \
 	if (should_free) { \
@@ -1110,6 +1109,12 @@ fast_assign:
 			}
 		} else {
 			if (EXPECTED(zobj->properties != NULL)) {
+				if (UNEXPECTED(GC_REFCOUNT(zobj->properties) > 1)) {
+					if (EXPECTED(!(GC_FLAGS(zobj->properties) & IS_ARRAY_IMMUTABLE))) {
+						GC_REFCOUNT(zobj->properties)--;
+					}
+					zobj->properties = zend_array_dup(zobj->properties);
+				}
 				property = zend_hash_find(zobj->properties, Z_STR_P(property_name));
 				if (property) {
 					goto fast_assign;
@@ -1682,7 +1687,7 @@ convert_to_array:
 
 		if (dim == NULL) {
 			zend_throw_error(NULL, "[] operator not supported for strings");
-			ZVAL_NULL(result);
+			ZVAL_INDIRECT(result, &EG(error_zval));
 		} else {
 			zend_check_string_offset(dim, type);
 			ZVAL_INDIRECT(result, NULL); /* wrong string offset */
@@ -2359,71 +2364,21 @@ static zend_always_inline zend_generator *zend_get_running_generator(zend_execut
 
 static zend_always_inline void i_cleanup_unfinished_execution(zend_execute_data *execute_data, uint32_t op_num, uint32_t catch_op_num) /* {{{ */
 {
-	if (EX(func)->op_array.T_liveliness
-	 && op_num < EX(func)->op_array.last
-	 && EX(func)->op_array.T_liveliness[op_num] != (uint32_t)-1) {
-		uint32_t *off = EX(func)->op_array.T_liveliness + EX(func)->op_array.T_liveliness[op_num];
-		uint32_t *catch_off = NULL;
-		uint32_t var = *off;
-
-		if (catch_op_num && EX(func)->op_array.T_liveliness[catch_op_num] != (uint32_t)-1) {
-			catch_off = EX(func)->op_array.T_liveliness + EX(func)->op_array.T_liveliness[catch_op_num];
-		}
-
-		do {
-			/* we should be safe to assume that all temporaries at catch_op_num will be present at op_num too, in same order */
-			if (catch_off && *catch_off == var) {
-				catch_off++;
-				var = *(++off);
-				continue;
-			}
-
-			if ((var & ZEND_LIVE_MASK) == ZEND_LIVE_ROPE) {
-				/* free incomplete rope */
-				zend_string **rope;
-				zend_op *last;
-
-				var = var & ~ZEND_LIVE_ROPE;
-				rope = (zend_string **) EX_VAR(var);
-				last = EX(func)->op_array.opcodes + op_num;
-				while ((last->opcode != ZEND_ROPE_ADD && last->opcode != ZEND_ROPE_INIT)
-						|| last->result.var != var) {
-					ZEND_ASSERT(last >= EX(func)->op_array.opcodes);
-					last--;
-				}
-				if (last->opcode == ZEND_ROPE_INIT) {
-					zend_string_release(*rope);
-				} else {
-					int j = last->extended_value;
-					do {
-						zend_string_release(rope[j]);
-					} while (j--);
-				}
-			} else if ((var & ZEND_LIVE_MASK) == ZEND_LIVE_SILENCE) {
-				/* restore previous error_reporting value */
-				var = var & ~ZEND_LIVE_SILENCE;
-				if (!EG(error_reporting) && Z_LVAL_P(EX_VAR(var)) != 0) {
-					EG(error_reporting) = Z_LVAL_P(EX_VAR(var));
-				}
-			} else if ((var & ZEND_LIVE_MASK) == ZEND_LIVE_LOOP) {
-				/* free loop variables */
-				var = var & ~ZEND_LIVE_LOOP;
-				if (Z_TYPE_P(EX_VAR(var)) != IS_ARRAY && Z_FE_ITER_P(EX_VAR(var)) != (uint32_t) -1) {
-					zend_hash_iterator_del(Z_FE_ITER_P(EX_VAR(var)));
-				}
-				zval_ptr_dtor_nogc(EX_VAR(var));
-			} else {
-				zval_ptr_dtor_nogc(EX_VAR(var));
-			}
-			var = *(++off);
-		} while (var != (uint32_t)-1);
-	}
-
+	int i;
 	if (UNEXPECTED(EX(call))) {
 		zend_execute_data *call = EX(call);
 		zend_op *opline = EX(func)->op_array.opcodes + op_num;
 		int level;
 		int do_exit;
+		
+		if (UNEXPECTED(opline->opcode == ZEND_INIT_FCALL ||
+			opline->opcode == ZEND_INIT_FCALL_BY_NAME ||
+			opline->opcode == ZEND_INIT_DYNAMIC_CALL ||
+			opline->opcode == ZEND_INIT_METHOD_CALL ||
+			opline->opcode == ZEND_INIT_STATIC_METHOD_CALL)) {
+			ZEND_ASSERT(op_num);
+			opline--;
+		}
 
 		do {
 			/* If the exception was thrown during a function call there might be
@@ -2532,6 +2487,51 @@ static zend_always_inline void i_cleanup_unfinished_execution(zend_execute_data 
 			call = EX(call);
 		} while (call);
 	}
+
+	for (i = 0; i < EX(func)->op_array.last_brk_cont; i++) {
+		const zend_brk_cont_element *brk_cont = &EX(func)->op_array.brk_cont_array[i];
+		if (brk_cont->start < 0) {
+			continue;
+		} else if (brk_cont->start > op_num) {
+			/* further blocks will not be relevant... */
+			break;
+		} else if (op_num < brk_cont->brk) {
+			if (!catch_op_num || catch_op_num >= brk_cont->brk) {
+				zend_op *brk_opline = &EX(func)->op_array.opcodes[brk_cont->brk];
+
+				if (brk_opline->opcode == ZEND_FREE) {
+					zval_ptr_dtor_nogc(EX_VAR(brk_opline->op1.var));
+				} else if (brk_opline->opcode == ZEND_FE_FREE) {
+					zval *var = EX_VAR(brk_opline->op1.var);
+					if (Z_TYPE_P(var) != IS_ARRAY && Z_FE_ITER_P(var) != (uint32_t)-1) {
+						zend_hash_iterator_del(Z_FE_ITER_P(var));
+					}
+					zval_ptr_dtor_nogc(var);
+				} else if (brk_opline->opcode == ZEND_ROPE_END) {
+					zend_string **rope = (zend_string **) EX_VAR(brk_opline->op1.var);
+					zend_op *last = EX(func)->op_array.opcodes + op_num;
+					while ((last->opcode != ZEND_ROPE_ADD && last->opcode != ZEND_ROPE_INIT)
+							|| last->result.var != brk_opline->op1.var) {
+						ZEND_ASSERT(last >= EX(func)->op_array.opcodes);
+						last--;
+					}
+					if (last->opcode == ZEND_ROPE_INIT) {
+						zend_string_release(*rope);
+					} else {
+						int j = last->extended_value;
+						do {
+							zend_string_release(rope[j]);
+						} while (j--);
+					}
+				} else if (brk_opline->opcode == ZEND_END_SILENCE) {
+					/* restore previous error_reporting value */
+					if (!EG(error_reporting) && Z_LVAL_P(EX_VAR(brk_opline->op1.var)) != 0) {
+						EG(error_reporting) = Z_LVAL_P(EX_VAR(brk_opline->op1.var));
+					}
+				}
+			}
+		}
+	}
 }
 /* }}} */
 
@@ -2552,10 +2552,20 @@ void zend_cleanup_unfinished_execution(zend_execute_data *execute_data, uint32_t
 # endif
 #endif
 
-#define ZEND_VM_NEXT_OPCODE() \
+#define ZEND_VM_NEXT_OPCODE_EX(check_exception, skip) \
 	CHECK_SYMBOL_TABLES() \
-	ZEND_VM_INC_OPCODE(); \
+	if (check_exception) { \
+		OPLINE = EX(opline) + (skip); \
+	} else { \
+		OPLINE = opline + (skip); \
+	} \
 	ZEND_VM_CONTINUE()
+
+#define ZEND_VM_NEXT_OPCODE_CHECK_EXCEPTION() \
+	ZEND_VM_NEXT_OPCODE_EX(1, 1)
+
+#define ZEND_VM_NEXT_OPCODE() \
+	ZEND_VM_NEXT_OPCODE_EX(0, 1)
 
 #define ZEND_VM_SET_NEXT_OPCODE(new_op) \
 	CHECK_SYMBOL_TABLES() \
