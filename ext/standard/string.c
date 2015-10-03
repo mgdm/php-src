@@ -117,8 +117,16 @@ void register_string_constants(INIT_FUNC_ARGS)
 
 int php_tag_find(char *tag, size_t len, const char *set);
 
+#ifdef PHP_WIN32
+# define SET_ALIGNED(alignment, decl) __declspec(align(alignment)) decl
+#elif HAVE_ATTRIBUTE_ALIGNED
+# define SET_ALIGNED(alignment, decl) decl __attribute__ ((__aligned__ (alignment)))
+#else
+# define SET_ALIGNED(alignment, decl) decl
+#endif
+
 /* this is read-only, so it's ok */
-static char hexconvtab[] = "0123456789abcdef";
+SET_ALIGNED(16, static char hexconvtab[]) = "0123456789abcdef";
 
 /* localeconv mutex */
 #ifdef ZTS
@@ -155,25 +163,22 @@ static zend_string *php_hex2bin(const unsigned char *old, const size_t oldlen)
 
 	for (i = j = 0; i < target_length; i++) {
 		unsigned char c = old[j++];
+		unsigned char l = c & ~0x20;
+		int is_letter = ((unsigned int) ((l - 'A') ^ (l - 'F' - 1))) >> (8 * sizeof(unsigned int) - 1);
 		unsigned char d;
 
-		if (c >= '0' && c <= '9') {
-			d = (c - '0') << 4;
-		} else if (c >= 'a' && c <= 'f') {
-			d = (c - 'a' + 10) << 4;
-		} else if (c >= 'A' && c <= 'F') {
-			d = (c - 'A' + 10) << 4;
+		/* basically (c >= '0' && c <= '9') || (l >= 'A' && l <= 'F') */ 
+		if (EXPECTED((((c ^ '0') - 10) >> (8 * sizeof(unsigned int) - 1)) | is_letter)) {
+			d = (l - 0x10 - 0x27 * is_letter) << 4;
 		} else {
 			zend_string_free(str);
 			return NULL;
 		}
 		c = old[j++];
-		if (c >= '0' && c <= '9') {
-			d |= c - '0';
-		} else if (c >= 'a' && c <= 'f') {
-			d |= c - 'a' + 10;
-		} else if (c >= 'A' && c <= 'F') {
-			d |= c - 'A' + 10;
+		l = c & ~0x20;
+		is_letter = ((unsigned int) ((l - 'A') ^ (l - 'F' - 1))) >> (8 * sizeof(unsigned int) - 1);
+		if (EXPECTED((((c ^ '0') - 10) >> (8 * sizeof(unsigned int) - 1)) | is_letter)) {
+			d |= l - 0x10 - 0x27 * is_letter;
 		} else {
 			zend_string_free(str);
 			return NULL;
@@ -3448,7 +3453,7 @@ PHP_FUNCTION(strtr)
 	}
 
 	if (ac == 2) {
-		HashTable *pats = HASH_OF(from);
+		HashTable *pats = Z_ARRVAL_P(from);
 
 		if (zend_hash_num_elements(pats) < 1) {
 			RETURN_STR_COPY(str);
@@ -3968,7 +3973,6 @@ static zend_long php_str_replace_in_subject(zval *search, zval *replace, zval *s
 		ZEND_HASH_FOREACH_VAL(Z_ARRVAL_P(search), search_entry) {
 			/* Make sure we're dealing with strings. */
 			ZVAL_DEREF(search_entry);
-			SEPARATE_ZVAL_NOREF(search_entry);
 			convert_to_string(search_entry);
 			if (Z_STRLEN_P(search_entry) == 0) {
 				if (Z_TYPE_P(replace) == IS_ARRAY) {

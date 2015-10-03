@@ -183,16 +183,17 @@ int phpdbg_do_parse(phpdbg_param_t *stack, char *input);
 #define PHPDBG_IS_INITIALIZING        (1ULL<<25)
 #define PHPDBG_IS_SIGNALED            (1ULL<<26)
 #define PHPDBG_IS_INTERACTIVE         (1ULL<<27)
-#define PHPDBG_IS_BP_ENABLED          (1ULL<<28)
-#define PHPDBG_IS_REMOTE              (1ULL<<29)
-#define PHPDBG_IS_DISCONNECTED        (1ULL<<30)
-#define PHPDBG_WRITE_XML              (1ULL<<31)
+#define PHPDBG_PREVENT_INTERACTIVE    (1ULL<<28)
+#define PHPDBG_IS_BP_ENABLED          (1ULL<<29)
+#define PHPDBG_IS_REMOTE              (1ULL<<30)
+#define PHPDBG_IS_DISCONNECTED        (1ULL<<31)
+#define PHPDBG_WRITE_XML              (1ULL<<32)
 
-#define PHPDBG_SHOW_REFCOUNTS         (1ULL<<32)
+#define PHPDBG_SHOW_REFCOUNTS         (1ULL<<33)
 
-#define PHPDBG_IN_SIGNAL_HANDLER      (1ULL<<33)
+#define PHPDBG_IN_SIGNAL_HANDLER      (1ULL<<34)
 
-#define PHPDBG_DISCARD_OUTPUT         (1ULL<<34)
+#define PHPDBG_DISCARD_OUTPUT         (1ULL<<35)
 
 #define PHPDBG_SEEK_MASK              (PHPDBG_IN_UNTIL | PHPDBG_IN_FINISH | PHPDBG_IN_LEAVE)
 #define PHPDBG_BP_RESOLVE_MASK	      (PHPDBG_HAS_FUNCTION_OPLINE_BP | PHPDBG_HAS_METHOD_OPLINE_BP | PHPDBG_HAS_FILE_OPLINE_BP)
@@ -265,6 +266,7 @@ ZEND_BEGIN_MODULE_GLOBALS(phpdbg)
 
 	zend_op_array *(*compile_file)(zend_file_handle *file_handle, int type);
 	zend_op_array *(*init_compile_file)(zend_file_handle *file_handle, int type);
+	zend_op_array *(*compile_string)(zval *source_string, char *filename);
 	HashTable file_sources;
 
 	FILE *oplog;                                 /* opline log */

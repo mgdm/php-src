@@ -272,6 +272,9 @@ zend_module_entry mcrypt_module_entry = {
 };
 
 #ifdef COMPILE_DL_MCRYPT
+#ifdef ZTS
+ZEND_TSRMLS_CACHE_DEFINE();
+#endif
 ZEND_GET_MODULE(mcrypt)
 #endif
 
@@ -349,13 +352,16 @@ static void php_mcrypt_module_dtor(zend_resource *rsrc) /* {{{ */
 /* }}} */
 
 static PHP_GINIT_FUNCTION(mcrypt)
-{
+{/*{{{*/
+#if defined(COMPILE_DL_MCRYPT) && defined(ZTS)
+	ZEND_TSRMLS_CACHE_UPDATE();
+#endif
 	mcrypt_globals->fd[RANDOM] = -1;
 	mcrypt_globals->fd[URANDOM] = -1;
-}
+}/*}}}*/
 
 static PHP_GSHUTDOWN_FUNCTION(mcrypt)
-{
+{/*{{{*/
 	if (mcrypt_globals->fd[RANDOM] > 0) {
 		close(mcrypt_globals->fd[RANDOM]);
 		mcrypt_globals->fd[RANDOM] = -1;
@@ -365,7 +371,7 @@ static PHP_GSHUTDOWN_FUNCTION(mcrypt)
 		close(mcrypt_globals->fd[URANDOM]);
 		mcrypt_globals->fd[URANDOM] = -1;
 	}
-}
+}/*}}}*/
 
 static PHP_MINIT_FUNCTION(mcrypt) /* {{{ */
 {
@@ -1212,6 +1218,10 @@ static int php_mcrypt_ensure_valid_iv(MCRYPT td, const char *iv, int iv_size) /*
 {
 	if (mcrypt_enc_mode_has_iv(td) == 1) {
 		int expected_iv_size = mcrypt_enc_get_iv_size(td);
+		if (expected_iv_size == 0) {
+			/* Algorithm does not use IV, even though mode supports it */
+			return SUCCESS;
+		}
 
 		if (!iv) {
 			php_error_docref(NULL, E_WARNING,
@@ -1371,7 +1381,7 @@ PHP_FUNCTION(mcrypt_create_iv)
 
 		while (read_bytes < size) {
 			n = read(*fd, iv + read_bytes, size - read_bytes);
-			if (n < 0) {
+			if (n <= 0) {
 				break;
 			}
 			read_bytes += n;

@@ -387,6 +387,10 @@ static inline void del_source(zend_code_block *from, zend_code_block *to)
 		return;
 	}
 
+	if (from == to) {
+		return;
+	}
+
 	while (*cs) {
 		if ((*cs)->from == from) {
 		 	DEL_SOURCE(cs);
@@ -1862,6 +1866,7 @@ static void zend_t_usage(zend_code_block *block, zend_op_array *op_array, zend_b
 					case ZEND_ASSIGN_SUB:
 					case ZEND_ASSIGN_MUL:
 					case ZEND_ASSIGN_DIV:
+					case ZEND_ASSIGN_POW:
 					case ZEND_ASSIGN_MOD:
 					case ZEND_ASSIGN_SL:
 					case ZEND_ASSIGN_SR:

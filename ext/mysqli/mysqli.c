@@ -801,7 +801,9 @@ PHP_MINIT_FUNCTION(mysqli)
 	REGISTER_LONG_CONSTANT("MYSQLI_TYPE_CHAR", FIELD_TYPE_CHAR, CONST_CS | CONST_PERSISTENT);
 	REGISTER_LONG_CONSTANT("MYSQLI_TYPE_INTERVAL", FIELD_TYPE_INTERVAL, CONST_CS | CONST_PERSISTENT);
 	REGISTER_LONG_CONSTANT("MYSQLI_TYPE_GEOMETRY", FIELD_TYPE_GEOMETRY, CONST_CS | CONST_PERSISTENT);
-
+#ifdef FIELD_TYPE_JSON
+	REGISTER_LONG_CONSTANT("MYSQLI_TYPE_JSON", FIELD_TYPE_JSON, CONST_CS | CONST_PERSISTENT);
+#endif
 #if MYSQL_VERSION_ID > 50002 || defined(MYSQLI_USE_MYSQLND)
 	REGISTER_LONG_CONSTANT("MYSQLI_TYPE_NEWDECIMAL", FIELD_TYPE_NEWDECIMAL, CONST_CS | CONST_PERSISTENT);
 	REGISTER_LONG_CONSTANT("MYSQLI_TYPE_BIT", FIELD_TYPE_BIT, CONST_CS | CONST_PERSISTENT);
@@ -1275,9 +1277,7 @@ void php_mysqli_fetch_into_hash(INTERNAL_FUNCTION_PARAMETERS, int override_flags
 
 		object_and_properties_init(return_value, ce, NULL);
 		if (!ce->default_properties_count && !ce->__set) {
-			ALLOC_HASHTABLE(Z_OBJ_P(return_value)->properties);
-			*Z_OBJ_P(return_value)->properties = *Z_ARRVAL(dataset);
-			efree(Z_ARR(dataset));
+			Z_OBJ_P(return_value)->properties = Z_ARR(dataset);
 		} else {
 			zend_merge_properties(return_value, Z_ARRVAL(dataset));
 			zval_ptr_dtor(&dataset);
